@@ -30,40 +30,47 @@ export async function POST(request: Request) {
       );
     }
 
-    const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
-    if (!blobToken) {
+    const imgbbApiKey = process.env.IMGBB_API_KEY;
+    if (!imgbbApiKey) {
       return NextResponse.json(
         { error: '이미지 저장이 설정되지 않았습니다.' },
         { status: 500 }
       );
     }
 
-    const filename = `maksh/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+    // Convert file to base64 for ImgBB API
+    const arrayBuffer = await file.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
 
-    // Use Vercel Blob REST API directly (avoids SDK bundling issues)
     const uploadRes = await fetch(
-      `https://blob.vercel.com?filename=${encodeURIComponent(filename)}`,
+      `https://api.imgbb.com/1/upload?key=${imgbbApiKey}`,
       {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${blobToken}`,
-          'x-content-type': file.type,
-        },
-        body: file,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `image=${encodeURIComponent(base64)}`,
       }
     );
 
     if (!uploadRes.ok) {
       const errText = await uploadRes.text().catch(() => '');
-      console.error('Blob upload failed:', uploadRes.status, errText);
+      console.error('ImgBB upload failed:', uploadRes.status, errText);
       return NextResponse.json(
         { error: '이미지 업로드에 실패했습니다.' },
         { status: 500 }
       );
     }
 
-    const blobData = await uploadRes.json();
-    return NextResponse.json({ url: blobData.url });
+    const imgbbData = await uploadRes.json();
+    const imageUrl = imgbbData?.data?.url;
+
+    if (!imageUrl) {
+      return NextResponse.json(
+        { error: '이미지 업로드에 실패했습니다.' },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ url: imageUrl });
   } catch {
     return NextResponse.json(
       { error: '이미지 업로드에 실패했습니다.' },
