@@ -1,28 +1,38 @@
 import { NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase-server';
+import { getTursoClient, initDatabase, generateId } from '@/lib/turso';
 import type { Character } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
+function rowToCharacter(row: Record<string, unknown>): Character {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    description: row.description as string,
+    personality: row.personality as string,
+    initial_prompt: row.initial_prompt as string,
+    image_url: row.image_url as string,
+    current_image_url: row.current_image_url as string,
+    created_at: row.created_at as string,
+  };
+}
+
 export async function GET() {
   try {
-    const supabase = createServerClient();
-    const { data, error } = await supabase
-      .from('characters')
-      .select('*')
-      .order('created_at', { ascending: false });
+    await initDatabase();
+    const db = getTursoClient();
+    const result = await db.execute(
+      'SELECT * FROM characters ORDER BY created_at DESC'
+    );
 
-    if (error) {
-      return NextResponse.json(
-        { error: '캐릭터 목록을 불러올 수 없습니다.' },
-        { status: 500 }
-      );
-    }
+    const characters = result.rows.map((row) =>
+      rowToCharacter(row as unknown as Record<string, unknown>)
+    );
 
-    return NextResponse.json({ characters: data as Character[] });
+    return NextResponse.json({ characters });
   } catch {
     return NextResponse.json(
-      { error: '서버 오류가 발생했습니다.' },
+      { error: '캐릭터 목록을 불러올 수 없습니다.' },
       { status: 500 }
     );
   }
@@ -40,31 +50,28 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = createServerClient();
-    const { data, error } = await supabase
-      .from('characters')
-      .insert({
-        name,
-        description,
-        personality,
-        initial_prompt,
-        image_url,
-        current_image_url: image_url,
-      })
-      .select()
-      .single();
+    await initDatabase();
+    const db = getTursoClient();
+    const id = generateId();
 
-    if (error) {
-      return NextResponse.json(
-        { error: '캐릭터를 생성할 수 없습니다.' },
-        { status: 500 }
-      );
-    }
+    await db.execute({
+      sql: `INSERT INTO characters (id, name, description, personality, initial_prompt, image_url, current_image_url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, name, description, personality, initial_prompt, image_url, image_url],
+    });
 
-    return NextResponse.json({ character: data as Character });
+    const result = await db.execute({
+      sql: 'SELECT * FROM characters WHERE id = ?',
+      args: [id],
+    });
+
+    const character = rowToCharacter(
+      result.rows[0] as unknown as Record<string, unknown>
+    );
+
+    return NextResponse.json({ character });
   } catch {
     return NextResponse.json(
-      { error: '서버 오류가 발생했습니다.' },
+      { error: '캐릭터를 생성할 수 없습니다.' },
       { status: 500 }
     );
   }
@@ -82,20 +89,14 @@ export async function DELETE(request: Request) {
       );
     }
 
-    const supabase = createServerClient();
-    const { error } = await supabase.from('characters').delete().eq('id', id);
-
-    if (error) {
-      return NextResponse.json(
-        { error: '캐릭터를 삭제할 수 없습니다.' },
-        { status: 500 }
-      );
-    }
+    await initDatabase();
+    const db = getTursoClient();
+    await db.execute({ sql: 'DELETE FROM characters WHERE id = ?', args: [id] });
 
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json(
-      { error: '서버 오류가 발생했습니다.' },
+      { error: '캐릭터를 삭제할 수 없습니다.' },
       { status: 500 }
     );
   }

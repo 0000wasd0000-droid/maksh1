@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase-server';
+import { getTursoClient, initDatabase } from '@/lib/turso';
 import { generateChatResponse } from '@/lib/gemini';
 import type { ChatMessage, CharacterState, ChatApiResponse } from '@/lib/types';
 
@@ -21,45 +21,47 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = createServerClient();
+    await initDatabase();
+    const db = getTursoClient();
 
     // Get character info
-    const { data: character, error: charError } = await supabase
-      .from('characters')
-      .select('*')
-      .eq('id', characterId)
-      .maybeSingle();
+    const charResult = await db.execute({
+      sql: 'SELECT * FROM characters WHERE id = ?',
+      args: [characterId],
+    });
 
-    if (charError || !character) {
+    if (charResult.rows.length === 0) {
       return NextResponse.json(
         { error: '캐릭터를 찾을 수 없습니다.' },
         { status: 404 }
       );
     }
 
-    // Get session
-    const { data: session, error: sessionError } = await supabase
-      .from('sessions')
-      .select('*')
-      .eq('id', sessionId)
-      .maybeSingle();
+    const character = charResult.rows[0] as unknown as Record<string, unknown>;
 
-    if (sessionError || !session) {
+    // Get session
+    const sessionResult = await db.execute({
+      sql: 'SELECT * FROM sessions WHERE id = ?',
+      args: [sessionId],
+    });
+
+    if (sessionResult.rows.length === 0) {
       return NextResponse.json(
         { error: '세션을 찾을 수 없습니다.' },
         { status: 404 }
       );
     }
 
-    const existingMessages = (session.messages as ChatMessage[]) || [];
-    const currentState = (session.state as CharacterState) || {};
+    const sessionRow = sessionResult.rows[0] as unknown as Record<string, unknown>;
+    const existingMessages: ChatMessage[] = JSON.parse(sessionRow.messages as string) || [];
+    const currentState: CharacterState = JSON.parse(sessionRow.state as string) || {};
 
     // Generate AI response
     const result = await generateChatResponse(
-      character.name,
-      character.description,
-      character.personality,
-      character.initial_prompt,
+      character.name as string,
+      character.description as string,
+      character.personality as string,
+      character.initial_prompt as string,
       existingMessages,
       message,
       currentState
@@ -72,14 +74,10 @@ export async function POST(request: Request) {
       { role: 'assistant', content: result.reply },
     ];
 
-    await supabase
-      .from('sessions')
-      .update({
-        messages: updatedMessages,
-        state: result.newState,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', sessionId);
+    await db.execute({
+      sql: `UPDATE sessions SET messages = ?, state = ?, updated_at = datetime('now') WHERE id = ?`,
+      args: [JSON.stringify(updatedMessages), JSON.stringify(result.newState), sessionId],
+    });
 
     const response: ChatApiResponse = {
       reply: result.reply,

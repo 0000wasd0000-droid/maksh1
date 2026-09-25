@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase-server';
+import { getTursoClient, initDatabase } from '@/lib/turso';
 import { generateImage } from '@/lib/gemini';
 import type { GenerateImageApiResponse, CharacterState } from '@/lib/types';
 
@@ -22,23 +22,23 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = createServerClient();
+    await initDatabase();
+    const db = getTursoClient();
 
     // Get session to find current image
-    const { data: session, error: sessionError } = await supabase
-      .from('sessions')
-      .select('current_image_url')
-      .eq('id', sessionId)
-      .maybeSingle();
+    const sessionResult = await db.execute({
+      sql: 'SELECT current_image_url FROM sessions WHERE id = ?',
+      args: [sessionId],
+    });
 
-    if (sessionError || !session) {
+    if (sessionResult.rows.length === 0) {
       return NextResponse.json(
         { error: '세션을 찾을 수 없습니다.' },
         { status: 404 }
       );
     }
 
-    const currentImageUrl = session.current_image_url;
+    const currentImageUrl = sessionResult.rows[0].current_image_url as string | null;
     if (!currentImageUrl) {
       return NextResponse.json(
         { error: '현재 이미지를 찾을 수 없습니다.' },
@@ -47,13 +47,13 @@ export async function POST(request: Request) {
     }
 
     // Get character description for consistency
-    const { data: character } = await supabase
-      .from('characters')
-      .select('description')
-      .eq('id', characterId)
-      .maybeSingle();
+    const charResult = await db.execute({
+      sql: 'SELECT description FROM characters WHERE id = ?',
+      args: [characterId],
+    });
 
-    const description = character?.description || '';
+    const description =
+      (charResult.rows[0]?.description as string) || '';
 
     // Generate new image
     const newImageUrl = await generateImage(
@@ -71,13 +71,10 @@ export async function POST(request: Request) {
     }
 
     // Update session with new image
-    await supabase
-      .from('sessions')
-      .update({
-        current_image_url: newImageUrl,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', sessionId);
+    await db.execute({
+      sql: `UPDATE sessions SET current_image_url = ?, updated_at = datetime('now') WHERE id = ?`,
+      args: [newImageUrl, sessionId],
+    });
 
     const response: GenerateImageApiResponse = { imageUrl: newImageUrl };
     return NextResponse.json(response);

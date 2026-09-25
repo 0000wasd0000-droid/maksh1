@@ -1,49 +1,49 @@
 import { NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase-server';
+import { getTursoClient, initDatabase, generateId } from '@/lib/turso';
 import type { Session, ChatMessage, CharacterState } from '@/lib/types';
 
 export const runtime = 'nodejs';
+
+function rowToSession(row: Record<string, unknown>): Session {
+  return {
+    id: row.id as string,
+    character_id: row.character_id as string,
+    messages: JSON.parse(row.messages as string) as ChatMessage[],
+    state: JSON.parse(row.state as string) as CharacterState,
+    current_image_url: (row.current_image_url as string) || null,
+    created_at: row.created_at as string,
+    updated_at: row.updated_at as string,
+  };
+}
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const characterId = searchParams.get('characterId');
 
+    await initDatabase();
+    const db = getTursoClient();
+
+    let result;
     if (characterId) {
-      const supabase = createServerClient();
-      const { data, error } = await supabase
-        .from('sessions')
-        .select('*')
-        .eq('character_id', characterId)
-        .order('updated_at', { ascending: false });
-
-      if (error) {
-        return NextResponse.json(
-          { error: '세션 목록을 불러올 수 없습니다.' },
-          { status: 500 }
-        );
-      }
-
-      return NextResponse.json({ sessions: data as Session[] });
-    }
-
-    const supabase = createServerClient();
-    const { data, error } = await supabase
-      .from('sessions')
-      .select('*')
-      .order('updated_at', { ascending: false });
-
-    if (error) {
-      return NextResponse.json(
-        { error: '세션 목록을 불러올 수 없습니다.' },
-        { status: 500 }
+      result = await db.execute({
+        sql: 'SELECT * FROM sessions WHERE character_id = ? ORDER BY updated_at DESC',
+        args: [characterId],
+      });
+    } else {
+      result = await db.execute(
+        'SELECT * FROM sessions ORDER BY updated_at DESC'
       );
     }
 
-    return NextResponse.json({ sessions: data as Session[] });
+    const sessions = result.rows.map((row) =>
+      rowToSession(row as unknown as Record<string, unknown>)
+    );
+
+    return NextResponse.json({ sessions });
   } catch {
     return NextResponse.json(
-      { error: '서버 오류가 발생했습니다.' },
+      { error: '세션 목록을 불러올 수 없습니다.' },
       { status: 500 }
     );
   }
@@ -61,44 +61,43 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = createServerClient();
+    await initDatabase();
+    const db = getTursoClient();
 
     // Get character to copy image_url
-    const { data: character, error: charError } = await supabase
-      .from('characters')
-      .select('image_url')
-      .eq('id', characterId)
-      .maybeSingle();
+    const charResult = await db.execute({
+      sql: 'SELECT image_url FROM characters WHERE id = ?',
+      args: [characterId],
+    });
 
-    if (charError || !character) {
+    if (charResult.rows.length === 0) {
       return NextResponse.json(
         { error: '캐릭터를 찾을 수 없습니다.' },
         { status: 404 }
       );
     }
 
-    const { data, error } = await supabase
-      .from('sessions')
-      .insert({
-        character_id: characterId,
-        messages: [] as ChatMessage[],
-        state: {} as CharacterState,
-        current_image_url: character.image_url,
-      })
-      .select()
-      .single();
+    const imageUrl = charResult.rows[0].image_url as string;
+    const id = generateId();
 
-    if (error) {
-      return NextResponse.json(
-        { error: '세션을 생성할 수 없습니다.' },
-        { status: 500 }
-      );
-    }
+    await db.execute({
+      sql: `INSERT INTO sessions (id, character_id, messages, state, current_image_url) VALUES (?, ?, '[]', '{}', ?)`,
+      args: [id, characterId, imageUrl],
+    });
 
-    return NextResponse.json({ session: data as Session });
+    const result = await db.execute({
+      sql: 'SELECT * FROM sessions WHERE id = ?',
+      args: [id],
+    });
+
+    const session = rowToSession(
+      result.rows[0] as unknown as Record<string, unknown>
+    );
+
+    return NextResponse.json({ session });
   } catch {
     return NextResponse.json(
-      { error: '서버 오류가 발생했습니다.' },
+      { error: '세션을 생성할 수 없습니다.' },
       { status: 500 }
     );
   }
@@ -116,28 +115,36 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const supabase = createServerClient();
-    const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (messages !== undefined) updateData.messages = messages;
-    if (state !== undefined) updateData.state = state;
-    if (currentImageUrl !== undefined) updateData.current_image_url = currentImageUrl;
+    await initDatabase();
+    const db = getTursoClient();
 
-    const { error } = await supabase
-      .from('sessions')
-      .update(updateData)
-      .eq('id', id);
+    const updates: string[] = ["updated_at = datetime('now')"];
+    const args: (string | unknown)[] = [];
 
-    if (error) {
-      return NextResponse.json(
-        { error: '세션을 업데이트할 수 없습니다.' },
-        { status: 500 }
-      );
+    if (messages !== undefined) {
+      updates.push('messages = ?');
+      args.push(JSON.stringify(messages));
     }
+    if (state !== undefined) {
+      updates.push('state = ?');
+      args.push(JSON.stringify(state));
+    }
+    if (currentImageUrl !== undefined) {
+      updates.push('current_image_url = ?');
+      args.push(currentImageUrl);
+    }
+
+    args.push(id);
+
+    await db.execute({
+      sql: `UPDATE sessions SET ${updates.join(', ')} WHERE id = ?`,
+      args: args as string[],
+    });
 
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json(
-      { error: '서버 오류가 발생했습니다.' },
+      { error: '세션을 업데이트할 수 없습니다.' },
       { status: 500 }
     );
   }
@@ -155,20 +162,14 @@ export async function DELETE(request: Request) {
       );
     }
 
-    const supabase = createServerClient();
-    const { error } = await supabase.from('sessions').delete().eq('id', id);
-
-    if (error) {
-      return NextResponse.json(
-        { error: '세션을 삭제할 수 없습니다.' },
-        { status: 500 }
-      );
-    }
+    await initDatabase();
+    const db = getTursoClient();
+    await db.execute({ sql: 'DELETE FROM sessions WHERE id = ?', args: [id] });
 
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json(
-      { error: '서버 오류가 발생했습니다.' },
+      { error: '세션을 삭제할 수 없습니다.' },
       { status: 500 }
     );
   }
