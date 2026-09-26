@@ -24,7 +24,13 @@ export async function generateChatResponse(
   currentState: CharacterState
 ): Promise<GeminiChatResult> {
   const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.5-flash',
+    generationConfig: {
+      responseMimeType: 'application/json',
+      temperature: 0.9,
+    },
+  });
 
   const systemContext = `당신은 "${characterName}"이라는 캐릭터입니다. 한국어로만 대답하세요.
 
@@ -69,7 +75,13 @@ imageRequired가 true가 되는 조건:
 
   const prompt = `${systemContext}\n\n[대화 기록]\n${conversationHistory}\n\n사용자: ${userMessage}\n\n이제 위 JSON 형식으로 응답하세요:`;
 
-  const result = await model.generateContent(prompt);
+  let result;
+  try {
+    result = await model.generateContent(prompt);
+  } catch (err) {
+    console.error('[Gemini Chat] generateContent failed:', err);
+    throw err;
+  }
   const text = result.response.text();
 
   // Extract JSON from response
@@ -87,7 +99,8 @@ imageRequired가 true가 되는 조건:
       imageRequired: parsed.imageRequired === true,
       imagePrompt: parsed.imagePrompt || '',
     };
-  } catch {
+  } catch (err) {
+    console.error('[Gemini Chat] JSON parse failed:', err, '\nRaw response:', text);
     // Fallback: treat the whole response as a reply
     return {
       reply: text,
@@ -105,7 +118,12 @@ export async function generateImage(
   characterDescription: string
 ): Promise<string | null> {
   const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.5-flash-image',
+    generationConfig: {
+      responseModalities: ['TEXT', 'IMAGE'],
+    } as Record<string, unknown>,
+  });
 
   // Fetch the current image and convert to inline data
   const imageResponse = await fetch(currentImageUrl);
@@ -151,8 +169,13 @@ IMPORTANT:
         }
       }
     }
+    console.error('[Gemini Image] No inlineData in response candidates:', JSON.stringify(candidates?.map(c => ({
+      content: c.content?.parts?.map((p) => Object.keys(p)),
+      finishReason: c.finishReason,
+    }))));
     return null;
-  } catch {
+  } catch (err) {
+    console.error('[Gemini Image] generateContent failed:', err);
     return null;
   }
 }

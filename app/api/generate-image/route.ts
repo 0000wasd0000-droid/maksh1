@@ -56,16 +56,25 @@ export async function POST(request: Request) {
       (charResult.rows[0]?.description as string) || '';
 
     // Generate new image
-    const newImageUrl = await generateImage(
-      currentImageUrl,
-      state,
-      imagePrompt || '',
-      description
-    );
+    let newImageUrl: string | null;
+    try {
+      newImageUrl = await generateImage(
+        currentImageUrl,
+        state,
+        imagePrompt || '',
+        description
+      );
+    } catch (err) {
+      console.error('[Image API] Gemini image generation error:', err);
+      return NextResponse.json(
+        { error: '이미지 생성 중 오류가 발생했습니다.', detail: String(err) },
+        { status: 500 }
+      );
+    }
 
     if (!newImageUrl) {
       return NextResponse.json(
-        { error: '이미지 생성에 실패했습니다.' },
+        { error: '이미지 생성에 실패했습니다. (응답에 이미지 데이터가 없습니다)' },
         { status: 500 }
       );
     }
@@ -78,9 +87,10 @@ export async function POST(request: Request) {
 
     const response: GenerateImageApiResponse = { imageUrl: newImageUrl };
     return NextResponse.json(response);
-  } catch {
+  } catch (err) {
+    console.error('[Image API] Unhandled error:', err);
     return NextResponse.json(
-      { error: '이미지 생성 중 오류가 발생했습니다.' },
+      { error: '이미지 생성 중 오류가 발생했습니다.', detail: String(err) },
       { status: 500 }
     );
   }

@@ -57,15 +57,24 @@ export async function POST(request: Request) {
     const currentState: CharacterState = JSON.parse(sessionRow.state as string) || {};
 
     // Generate AI response
-    const result = await generateChatResponse(
-      character.name as string,
-      character.description as string,
-      character.personality as string,
-      character.initial_prompt as string,
-      existingMessages,
-      message,
-      currentState
-    );
+    let result;
+    try {
+      result = await generateChatResponse(
+        character.name as string,
+        character.description as string,
+        character.personality as string,
+        character.initial_prompt as string,
+        existingMessages,
+        message,
+        currentState
+      );
+    } catch (err) {
+      console.error('[Chat API] Gemini error:', err);
+      return NextResponse.json(
+        { error: 'AI 응답 생성에 실패했습니다.', detail: String(err) },
+        { status: 500 }
+      );
+    }
 
     // Update session with new messages and state
     const updatedMessages: ChatMessage[] = [
@@ -87,9 +96,10 @@ export async function POST(request: Request) {
     };
 
     return NextResponse.json(response);
-  } catch {
+  } catch (err) {
+    console.error('[Chat API] Unhandled error:', err);
     return NextResponse.json(
-      { error: '대화 처리 중 오류가 발생했습니다.' },
+      { error: '대화 처리 중 오류가 발생했습니다.', detail: String(err) },
       { status: 500 }
     );
   }
