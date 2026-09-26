@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getTursoClient, initDatabase } from '@/lib/turso';
+import { turso, initDatabase } from '@/lib/turso';
 import { generateImage } from '@/lib/gemini';
 import type { GenerateImageApiResponse, CharacterState } from '@/lib/types';
 
@@ -23,10 +23,9 @@ export async function POST(request: Request) {
     }
 
     await initDatabase();
-    const db = getTursoClient();
 
     // Get session to find current image
-    const sessionResult = await db.execute({
+    const sessionResult = await turso.execute({
       sql: 'SELECT current_image_url FROM sessions WHERE id = ?',
       args: [sessionId],
     });
@@ -47,7 +46,7 @@ export async function POST(request: Request) {
     }
 
     // Get character description for consistency
-    const charResult = await db.execute({
+    const charResult = await turso.execute({
       sql: 'SELECT description FROM characters WHERE id = ?',
       args: [characterId],
     });
@@ -80,7 +79,7 @@ export async function POST(request: Request) {
     }
 
     // Update session with new image
-    await db.execute({
+    await turso.execute({
       sql: `UPDATE sessions SET current_image_url = ?, updated_at = datetime('now') WHERE id = ?`,
       args: [newImageUrl, sessionId],
     });

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getTursoClient, initDatabase, generateId } from '@/lib/turso';
+import { turso, initDatabase, generateId } from '@/lib/turso';
 import type { Session, ChatMessage, CharacterState } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -22,16 +22,15 @@ export async function GET(request: Request) {
     const characterId = searchParams.get('characterId');
 
     await initDatabase();
-    const db = getTursoClient();
 
     let result;
     if (characterId) {
-      result = await db.execute({
+      result = await turso.execute({
         sql: 'SELECT * FROM sessions WHERE character_id = ? ORDER BY updated_at DESC',
         args: [characterId],
       });
     } else {
-      result = await db.execute(
+      result = await turso.execute(
         'SELECT * FROM sessions ORDER BY updated_at DESC'
       );
     }
@@ -62,10 +61,9 @@ export async function POST(request: Request) {
     }
 
     await initDatabase();
-    const db = getTursoClient();
 
     // Get character to copy image_url
-    const charResult = await db.execute({
+    const charResult = await turso.execute({
       sql: 'SELECT image_url FROM characters WHERE id = ?',
       args: [characterId],
     });
@@ -80,12 +78,12 @@ export async function POST(request: Request) {
     const imageUrl = charResult.rows[0].image_url as string;
     const id = generateId();
 
-    await db.execute({
+    await turso.execute({
       sql: `INSERT INTO sessions (id, character_id, messages, state, current_image_url) VALUES (?, ?, '[]', '{}', ?)`,
       args: [id, characterId, imageUrl],
     });
 
-    const result = await db.execute({
+    const result = await turso.execute({
       sql: 'SELECT * FROM sessions WHERE id = ?',
       args: [id],
     });
@@ -116,7 +114,6 @@ export async function PATCH(request: Request) {
     }
 
     await initDatabase();
-    const db = getTursoClient();
 
     const updates: string[] = ["updated_at = datetime('now')"];
     const args: (string | unknown)[] = [];
@@ -136,7 +133,7 @@ export async function PATCH(request: Request) {
 
     args.push(id);
 
-    await db.execute({
+    await turso.execute({
       sql: `UPDATE sessions SET ${updates.join(', ')} WHERE id = ?`,
       args: args as string[],
     });
@@ -163,8 +160,7 @@ export async function DELETE(request: Request) {
     }
 
     await initDatabase();
-    const db = getTursoClient();
-    await db.execute({ sql: 'DELETE FROM sessions WHERE id = ?', args: [id] });
+    await turso.execute({ sql: 'DELETE FROM sessions WHERE id = ?', args: [id] });
 
     return NextResponse.json({ success: true });
   } catch {

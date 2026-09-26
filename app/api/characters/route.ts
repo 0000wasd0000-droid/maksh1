@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getTursoClient, initDatabase, generateId } from '@/lib/turso';
+import { turso, initDatabase, generateId } from '@/lib/turso';
 import type { Character } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -20,8 +20,7 @@ function rowToCharacter(row: Record<string, unknown>): Character {
 export async function GET() {
   try {
     await initDatabase();
-    const db = getTursoClient();
-    const result = await db.execute(
+    const result = await turso.execute(
       'SELECT * FROM characters ORDER BY created_at DESC'
     );
 
@@ -51,15 +50,14 @@ export async function POST(request: Request) {
     }
 
     await initDatabase();
-    const db = getTursoClient();
     const id = generateId();
 
-    await db.execute({
+    await turso.execute({
       sql: `INSERT INTO characters (id, name, description, personality, initial_prompt, image_url, current_image_url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       args: [id, name, description, personality, initial_prompt, image_url, image_url],
     });
 
-    const result = await db.execute({
+    const result = await turso.execute({
       sql: 'SELECT * FROM characters WHERE id = ?',
       args: [id],
     });
@@ -90,8 +88,7 @@ export async function DELETE(request: Request) {
     }
 
     await initDatabase();
-    const db = getTursoClient();
-    await db.execute({ sql: 'DELETE FROM characters WHERE id = ?', args: [id] });
+    await turso.execute({ sql: 'DELETE FROM characters WHERE id = ?', args: [id] });
 
     return NextResponse.json({ success: true });
   } catch {

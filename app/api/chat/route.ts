@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getTursoClient, initDatabase } from '@/lib/turso';
+import { turso, initDatabase } from '@/lib/turso';
 import { generateChatResponse } from '@/lib/gemini';
 import type { ChatMessage, CharacterState, ChatApiResponse } from '@/lib/types';
 
@@ -22,10 +22,9 @@ export async function POST(request: Request) {
     }
 
     await initDatabase();
-    const db = getTursoClient();
 
     // Get character info
-    const charResult = await db.execute({
+    const charResult = await turso.execute({
       sql: 'SELECT * FROM characters WHERE id = ?',
       args: [characterId],
     });
@@ -40,7 +39,7 @@ export async function POST(request: Request) {
     const character = charResult.rows[0] as unknown as Record<string, unknown>;
 
     // Get session
-    const sessionResult = await db.execute({
+    const sessionResult = await turso.execute({
       sql: 'SELECT * FROM sessions WHERE id = ?',
       args: [sessionId],
     });
@@ -83,7 +82,7 @@ export async function POST(request: Request) {
       { role: 'assistant', content: result.reply },
     ];
 
-    await db.execute({
+    await turso.execute({
       sql: `UPDATE sessions SET messages = ?, state = ?, updated_at = datetime('now') WHERE id = ?`,
       args: [JSON.stringify(updatedMessages), JSON.stringify(result.newState), sessionId],
     });
