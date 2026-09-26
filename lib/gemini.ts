@@ -7,6 +7,33 @@ function getClient() {
   return new GoogleGenerativeAI(apiKey);
 }
 
+function extractImageDataUrl(result: { response: { candidates?: Array<{ content?: { parts?: unknown[] } }> } }): string | null {
+  const candidates = result.response.candidates;
+  if (!candidates) return null;
+
+  for (const candidate of candidates) {
+    const parts = candidate.content?.parts;
+    if (!parts) continue;
+
+    for (const part of parts) {
+      const p = part as Record<string, unknown>;
+      if (p.inlineData && typeof p.inlineData === 'object') {
+        const data = p.inlineData as { data?: string; mimeType?: string };
+        if (data.data && data.mimeType) {
+          return `data:${data.mimeType};base64,${data.data}`;
+        }
+      }
+      if (p.fileData && typeof p.fileData === 'object') {
+        const fileData = p.fileData as { fileUri?: string; mimeType?: string };
+        if (fileData.fileUri && fileData.mimeType) {
+          return `data:${fileData.mimeType};base64,${fileData.fileUri}`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 interface GeminiChatResult {
   reply: string;
   newState: CharacterState;
@@ -119,7 +146,7 @@ export async function generateImage(
 ): Promise<string | null> {
   const genAI = getClient();
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash-image',
+    model: 'gemini-3.1-flash-image',
     generationConfig: {
       responseModalities: ['TEXT', 'IMAGE'],
     } as Record<string, unknown>,
@@ -127,6 +154,9 @@ export async function generateImage(
 
   // Fetch the current image and convert to inline data
   const imageResponse = await fetch(currentImageUrl);
+  if (!imageResponse.ok) {
+    throw new Error(`Failed to fetch current image: HTTP ${imageResponse.status}`);
+  }
   const imageBuffer = await imageResponse.arrayBuffer();
   const base64Data = Buffer.from(imageBuffer).toString('base64');
   const mimeType = imageResponse.headers.get('content-type') || 'image/png';
@@ -156,23 +186,14 @@ IMPORTANT:
       { text: prompt },
     ]);
 
-    // Try to extract image from response
+    const imageDataUrl = extractImageDataUrl(result);
+    if (imageDataUrl) return imageDataUrl;
+
     const candidates = result.response.candidates;
-    if (candidates && candidates.length > 0) {
-      for (const candidate of candidates) {
-        if (candidate.content && candidate.content.parts) {
-          for (const part of candidate.content.parts) {
-            if (part.inlineData) {
-              return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-            }
-          }
-        }
-      }
-    }
-    console.error('[Gemini Image] No inlineData in response candidates:', JSON.stringify(candidates?.map(c => ({
-      content: c.content?.parts?.map((p) => Object.keys(p)),
+    console.error('[Gemini Image] No image data in response. Candidates:', JSON.stringify(candidates?.map(c => ({
       finishReason: c.finishReason,
-    }))));
+      partTypes: c.content?.parts?.map((p) => Object.keys(p)),
+    })), null, 2));
     return null;
   } catch (err) {
     console.error('[Gemini Image] generateContent failed:', err);
