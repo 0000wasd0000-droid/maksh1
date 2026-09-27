@@ -51,13 +51,16 @@ export async function generateChatResponse(
   currentState: CharacterState
 ): Promise<GeminiChatResult> {
   const genAI = getClient();
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-3.5-flash-lite',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.9,
+  const model = genAI.getGenerativeModel(
+    {
+      model: 'gemini-3.5-flash-lite',
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.9,
+      },
     },
-  });
+    { timeout: 60000 }
+  );
 
   const systemContext = `당신은 "${characterName}"이라는 캐릭터입니다. 한국어로만 대답하세요.
 
@@ -145,15 +148,20 @@ export async function generateImage(
   characterDescription: string
 ): Promise<string | null> {
   const genAI = getClient();
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-3.1-flash-image',
-    generationConfig: {
-      responseModalities: ['TEXT', 'IMAGE'],
-    } as Record<string, unknown>,
-  });
+  const model = genAI.getGenerativeModel(
+    {
+      model: 'gemini-3.1-flash-image',
+      generationConfig: {
+        responseModalities: ['TEXT', 'IMAGE'],
+      } as Record<string, unknown>,
+    },
+    { timeout: 120000 }
+  );
 
-  // Fetch the current image and convert to inline data
-  const imageResponse = await fetch(currentImageUrl);
+  // Fetch the current image with a generous timeout
+  const imageResponse = await fetch(currentImageUrl, {
+    signal: AbortSignal.timeout(60000),
+  });
   if (!imageResponse.ok) {
     throw new Error(`Failed to fetch current image: HTTP ${imageResponse.status}`);
   }
@@ -181,10 +189,13 @@ IMPORTANT:
 - Return a high-quality image that looks natural and seamless.`;
 
   try {
-    const result = await model.generateContent([
-      { inlineData: { data: base64Data, mimeType } },
-      { text: prompt },
-    ]);
+    const result = await model.generateContent(
+      [
+        { inlineData: { data: base64Data, mimeType } },
+        { text: prompt },
+      ],
+      { timeout: 120000 }
+    );
 
     const imageDataUrl = extractImageDataUrl(result);
     if (imageDataUrl) return imageDataUrl;
