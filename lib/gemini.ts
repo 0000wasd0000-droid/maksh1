@@ -3,8 +3,87 @@ import type { ChatMessage, CharacterState } from './types';
 
 const apiKey = process.env.GEMINI_API_KEY!;
 
+const IMAGE_FETCH_TIMEOUT = 90000;
+const IMAGE_API_TIMEOUT = 180000;
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY = 2000;
+
 function getClient() {
   return new GoogleGenerativeAI(apiKey);
+}
+
+function isRetryableError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes('UND_ERR_SOCKET') ||
+    msg.includes('fetch failed') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('socket hang up') ||
+    msg.includes('network') ||
+    msg.includes('timeout') ||
+    msg.includes('aborted')
+  );
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(
+  url: string,
+  timeoutMs: number,
+  maxRetries: number = MAX_RETRIES
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (response.ok) return response;
+      if (response.status >= 500 && attempt < maxRetries - 1) {
+        await sleep(RETRY_BASE_DELAY * (attempt + 1));
+        continue;
+      }
+      return response;
+    } catch (err) {
+      lastError = err;
+      if (isRetryableError(err) && attempt < maxRetries - 1) {
+        console.warn(`[fetchWithRetry] Attempt ${attempt + 1}/${maxRetries} failed, retrying...`, msg(err));
+        await sleep(RETRY_BASE_DELAY * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
+function msg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  maxRetries: number = MAX_RETRIES
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (isRetryableError(err) && attempt < maxRetries - 1) {
+        console.warn(`[${label}] Attempt ${attempt + 1}/${maxRetries} failed, retrying...`, msg(err));
+        await sleep(RETRY_BASE_DELAY * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
 }
 
 function extractImageDataUrl(result: { response: { candidates?: Array<{ content?: { parts?: unknown[] } }> } }): string | null {
@@ -119,7 +198,10 @@ imageRequired가 true가 되는 조건:
 
   let result;
   try {
-    result = await model.generateContent(prompt);
+    result = await withRetry(
+      () => model.generateContent(prompt, { timeout: 60000 }),
+      'Gemini Chat'
+    );
   } catch (err) {
     console.error('[Gemini Chat] generateContent failed:', err);
     throw err;
@@ -167,13 +249,11 @@ export async function generateImage(
         responseModalities: ['TEXT', 'IMAGE'],
       } as Record<string, unknown>,
     },
-    { timeout: 120000 }
+    { timeout: IMAGE_API_TIMEOUT }
   );
 
-  // Fetch the current image with a generous timeout
-  const imageResponse = await fetch(currentImageUrl, {
-    signal: AbortSignal.timeout(60000),
-  });
+  // Fetch the current image with retry and generous timeout
+  const imageResponse = await fetchWithRetry(currentImageUrl, IMAGE_FETCH_TIMEOUT);
   if (!imageResponse.ok) {
     throw new Error(`Failed to fetch current image: HTTP ${imageResponse.status}`);
   }
@@ -200,13 +280,15 @@ IMPORTANT:
 - Only apply the described changes (expression, pose, outfit, scene, etc.).
 - Return a high-quality image that looks natural and seamless.`;
 
+  const parts = [
+    { inlineData: { data: base64Data, mimeType } },
+    { text: prompt },
+  ];
+
   try {
-    const result = await model.generateContent(
-      [
-        { inlineData: { data: base64Data, mimeType } },
-        { text: prompt },
-      ],
-      { timeout: 120000 }
+    const result = await withRetry(
+      () => model.generateContent(parts, { timeout: IMAGE_API_TIMEOUT }),
+      'Gemini Image'
     );
 
     const imageDataUrl = extractImageDataUrl(result);
@@ -219,7 +301,7 @@ IMPORTANT:
     })), null, 2));
     return null;
   } catch (err) {
-    console.error('[Gemini Image] generateContent failed:', err);
+    console.error('[Gemini Image] generateContent failed after retries:', msg(err));
     return null;
   }
 }
